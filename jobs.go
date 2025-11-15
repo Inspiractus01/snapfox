@@ -5,59 +5,54 @@ import (
 	"time"
 )
 
-type Job struct {
-	ID            int    `json:"id"`
+type BackupJob struct {
+	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Source        string `json:"source"`
 	Destination   string `json:"destination"`
-	IntervalHours int    `json:"interval_hours"`
-	KeepLast      int    `json:"keep_last"`
-	LastRun       string `json:"last_run"` // RFC3339
+	IntervalHours int    `json:"interval_hours"` // 0 = manual only
+	LastRun       string `json:"last_run,omitempty"`
+	MaxSnapshots  int    `json:"max_snapshots"` // 0 = unlimited
 }
 
-func (j *Job) LastRunTime() (time.Time, bool) {
-	if j.LastRun == "" {
-		return time.Time{}, false
+func (j *BackupJob) NextRunTime() *time.Time {
+	if j.IntervalHours <= 0 {
+		return nil
 	}
+	if j.LastRun == "" {
+		// never ran = due now
+		t := time.Time{}
+		return &t
+	}
+
 	t, err := time.Parse(time.RFC3339, j.LastRun)
 	if err != nil {
-		return time.Time{}, false
+		t2 := time.Time{}
+		return &t2
 	}
-	return t, true
+	next := t.Add(time.Duration(j.IntervalHours) * time.Hour)
+	return &next
 }
 
-func (j *Job) NextRunTime() (time.Time, bool) {
-	last, ok := j.LastRunTime()
-	if !ok || j.IntervalHours <= 0 {
-		return time.Time{}, false
+func (j *BackupJob) IsDue(now time.Time) bool {
+	if j.IntervalHours <= 0 {
+		return false
 	}
-	return last.Add(time.Duration(j.IntervalHours) * time.Hour), true
+	next := j.NextRunTime()
+	if next == nil {
+		return false
+	}
+	return !next.After(now)
 }
 
-func (j *Job) IsDueNow(now time.Time) bool {
-	next, ok := j.NextRunTime()
-	if !ok {
-		// Never ran or no interval -> treat as "due"
-		return true
-	}
-	return !now.Before(next)
+func (cfg *Config) AddJob(job BackupJob) {
+	cfg.Jobs = append(cfg.Jobs, job)
 }
 
-func (j *Job) Summary() string {
-	last, hasLast := j.LastRunTime()
-	lastStr := "never"
-	if hasLast {
-		lastStr = last.Format("2006-01-02 15:04")
+func (cfg *Config) DeleteJobByIndex(idx int) error {
+	if idx < 0 || idx >= len(cfg.Jobs) {
+		return fmt.Errorf("invalid job index")
 	}
-
-	return fmt.Sprintf(
-		"[%d] %s\n  from: %s\n    to: %s\n  every: %d h   keep: %d   last: %s",
-		j.ID,
-		j.Name,
-		j.Source,
-		j.Destination,
-		j.IntervalHours,
-		j.KeepLast,
-		lastStr,
-	)
+	cfg.Jobs = append(cfg.Jobs[:idx], cfg.Jobs[idx+1:]...)
+	return nil
 }

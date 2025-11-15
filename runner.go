@@ -10,63 +10,40 @@ import (
 	"time"
 )
 
-func RunAllJobs(cfg *Config, cfgPath string) error {
-	now := time.Now()
-	for i := range cfg.Jobs {
-		if err := runSingleJob(&cfg.Jobs[i], now); err != nil {
-			fmt.Printf("Job %d (%s) failed: %v\n", cfg.Jobs[i].ID, cfg.Jobs[i].Name, err)
-		}
+func sanitizeName(name string) string {
+	if name == "" {
+		return "job"
 	}
-	return cfg.Save(cfgPath)
+	replacer := strings.NewReplacer(" ", "_", ":", "-", "/", "-", "\\", "-")
+	return replacer.Replace(name)
 }
 
-// still nechávam aj RunDueJobs, môžeš si ho časom zavolať z cronu
-func RunDueJobs(cfg *Config, cfgPath string) error {
+func RunJob(job *BackupJob) error {
 	now := time.Now()
-	for i := range cfg.Jobs {
-		if cfg.Jobs[i].IsDueNow(now) {
-			if err := runSingleJob(&cfg.Jobs[i], now); err != nil {
-				fmt.Printf("Job %d (%s) failed: %v\n", cfg.Jobs[i].ID, cfg.Jobs[i].Name, err)
-			}
-		}
-	}
-	return cfg.Save(cfgPath)
-}
+	ts := now.Format("2006-01-02_15-04-05")
 
-func runSingleJob(j *Job, now time.Time) error {
-	if j.KeepLast <= 0 {
-		j.KeepLast = 10
+	baseName := sanitizeName(job.Name)
+	if baseName == "" {
+		baseName = sanitizeName(job.ID)
+	}
+	targetDir := filepath.Join(job.Destination, fmt.Sprintf("%s_%s", baseName, ts))
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create target dir: %w", err)
 	}
 
-	src := j.Source
-	dstRoot := j.Destination
-
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("source not accessible: %w", err)
+	// Ensure source ends with slash (rsync convention)
+	src := job.Source
+	if !strings.HasSuffix(src, "/") {
+		src = src + "/"
 	}
-	if err := os.MkdirAll(dstRoot, 0o755); err != nil {
-		return fmt.Errorf("failed to create destination root: %w", err)
-	}
+	dst := targetDir + "/"
 
-	ts := now.Format("20060102-150405")
-	slug := slugify(j.Name)
-	dstSnap := filepath.Join(dstRoot, fmt.Sprintf("%s-%s", slug, ts))
+	fmt.Printf("Running backup '%s'\n", job.Name)
+	fmt.Printf("  From: %s\n", job.Source)
+	fmt.Printf("  To:   %s\n", targetDir)
 
-	if err := os.MkdirAll(dstSnap, 0o755); err != nil {
-		return fmt.Errorf("failed to create snapshot dir: %w", err)
-	}
-
-	fmt.Printf("→ Running job [%d] %s\n", j.ID, j.Name)
-	fmt.Printf("  from %s\n  to   %s\n", src, dstSnap)
-
-	// rsync src/ -> dstSnap/
-	cmd := exec.Command(
-		"rsync",
-		"-a",
-		"--delete",
-		src+string(os.PathSeparator),
-		dstSnap+string(os.PathSeparator),
-	)
+	cmd := exec.Command("rsync", "-a", src, dst)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -74,76 +51,98 @@ func runSingleJob(j *Job, now time.Time) error {
 		return fmt.Errorf("rsync failed: %w", err)
 	}
 
-	j.LastRun = now.Format(time.RFC3339)
+	// Update last run time
+	job.LastRun = now.Format(time.RFC3339)
 
-	if err := pruneSnapshots(j); err != nil {
-		fmt.Printf("  ! failed to prune snapshots: %v\n", err)
+	// Enforce retention if set
+	if job.MaxSnapshots > 0 {
+		if err := enforceRetention(job); err != nil {
+			fmt.Printf("Retention warning for '%s': %v\n", job.Name, err)
+		}
 	}
 
-	fmt.Println("  done.")
+	fmt.Println("Backup finished.")
 	return nil
 }
 
-type snapshotInfo struct {
-	path string
-	time time.Time
-}
-
-func pruneSnapshots(j *Job) error {
-	if j.KeepLast <= 0 {
-		return nil
-	}
-
-	entries, err := os.ReadDir(j.Destination)
+func enforceRetention(job *BackupJob) error {
+	entries, err := os.ReadDir(job.Destination)
 	if err != nil {
 		return err
 	}
 
-	prefix := slugify(j.Name) + "-"
-	var snaps []snapshotInfo
+	baseName := sanitizeName(job.Name)
+	if baseName == "" {
+		baseName = sanitizeName(job.ID)
+	}
 
+	var snapshots []os.DirEntry
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if !strings.HasPrefix(name, prefix) {
-			continue
+		if strings.HasPrefix(e.Name(), baseName+"_") {
+			snapshots = append(snapshots, e)
 		}
-		tsPart := strings.TrimPrefix(name, prefix)
-		t, err := time.Parse("20060102-150405", tsPart)
-		if err != nil {
-			continue
-		}
-		snaps = append(snaps, snapshotInfo{
-			path: filepath.Join(j.Destination, name),
-			time: t,
-		})
 	}
 
-	if len(snaps) <= j.KeepLast {
+	if len(snapshots) <= job.MaxSnapshots {
 		return nil
 	}
 
-	sort.Slice(snaps, func(i, k int) bool {
-		return snaps[i].time.Before(snaps[k].time)
+	// sort by name (contains timestamp, so works reasonably)
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].Name() < snapshots[j].Name()
 	})
 
-	toDelete := snaps[0 : len(snaps)-j.KeepLast]
-	for _, s := range toDelete {
-		fmt.Printf("  → removing old backup %s\n", s.path)
-		if err := os.RemoveAll(s.path); err != nil {
-			fmt.Printf("    ! failed to remove: %v\n", err)
+	toDelete := len(snapshots) - job.MaxSnapshots
+	for i := 0; i < toDelete; i++ {
+		path := filepath.Join(job.Destination, snapshots[i].Name())
+		fmt.Printf("Deleting old snapshot: %s\n", path)
+		if err := os.RemoveAll(path); err != nil {
+			fmt.Printf("Failed to delete %s: %v\n", path, err)
 		}
 	}
 
 	return nil
 }
 
-func slugify(name string) string {
-	s := strings.TrimSpace(strings.ToLower(name))
-	s = strings.ReplaceAll(s, " ", "_")
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, "\\", "-")
-	return s
+func RunAllBackups(cfg *Config) error {
+	if len(cfg.Jobs) == 0 {
+		fmt.Println("No jobs configured.")
+		return nil
+	}
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+		fmt.Printf("\n=== Job %d: %s ===\n", i+1, job.Name)
+		if err := RunJob(job); err != nil {
+			fmt.Printf("Error: %v\n", err)
+		}
+	}
+
+	return SaveConfig(cfg)
+}
+
+func RunDueBackups(cfg *Config) error {
+	now := time.Now()
+	ranAny := false
+
+	for i := range cfg.Jobs {
+		job := &cfg.Jobs[i]
+		if job.IsDue(now) {
+			fmt.Printf("\n=== Running due job: %s ===\n", job.Name)
+			if err := RunJob(job); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+			ranAny = true
+		}
+	}
+
+	if !ranAny {
+		fmt.Println("No jobs are due at this time.")
+		return nil
+	}
+
+	return SaveConfig(cfg)
 }

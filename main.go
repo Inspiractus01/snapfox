@@ -5,37 +5,46 @@ import (
 	"os"
 )
 
-const ConfigPath = "snapfox.json"
-
 func main() {
-	cfg, err := LoadConfig(ConfigPath)
+	cfg, err := LoadConfig()
 	if err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Optional CLI shortcuts
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "run-all":
-			if err := RunAllJobs(cfg, ConfigPath); err != nil {
-				fmt.Printf("Error running jobs: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "run-due":
-			if err := RunDueJobs(cfg, ConfigPath); err != nil {
-				fmt.Printf("Error running jobs: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		case "list":
-			m := NewMenu(cfg, ConfigPath)
-			m.listJobs()
-			return
+	// No args = interactive menu
+	if len(os.Args) == 1 {
+		if err := ShowMenu(cfg); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
 		}
+		return
 	}
 
-	menu := NewMenu(cfg, ConfigPath)
-	menu.ShowMainMenu()
+	switch os.Args[1] {
+	case "menu":
+		if err := ShowMenu(cfg); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "run-due":
+		if err := RunDueBackups(cfg); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "run-all":
+		if err := RunAllBackups(cfg); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Println("Snapfox – Simple backup scheduler using rsync")
+		fmt.Println("")
+		fmt.Println("Usage:")
+		fmt.Println("  snapfox           # interactive menu")
+		fmt.Println("  snapfox menu      # interactive menu")
+		fmt.Println("  snapfox run-due   # run only due backups (for systemd timer)")
+		fmt.Println("  snapfox run-all   # run all configured backups once")
+		os.Exit(1)
+	}
 }
