@@ -5,7 +5,7 @@
 Install Snapfox with a single command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/inspiractus01/snapfox/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Inspiractus01/snapfox/main/install.sh | sudo bash
 ```
 
 This will:
