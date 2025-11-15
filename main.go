@@ -14,6 +14,7 @@ func main() {
 
 	// No args = interactive menu
 	if len(os.Args) == 1 {
+		maybeCheckForUpdates() // <<-- pridané
 		if err := ShowMenu(cfg); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
@@ -23,11 +24,13 @@ func main() {
 
 	switch os.Args[1] {
 	case "menu":
+		maybeCheckForUpdates() // <<-- pridané
 		if err := ShowMenu(cfg); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
 	case "run-due":
+		// systemd timer – žiadny network check, nech to je tiché a rýchle
 		if err := RunDueBackups(cfg); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
