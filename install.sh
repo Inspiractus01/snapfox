@@ -19,13 +19,14 @@ echo "Install:  $INSTALL_DIR/$BINARY_NAME"
 echo "User:     $SNAPFOX_USER"
 echo ""
 
+# Must run as root (for install + systemd)
 if [ "$(id -u)" -ne 0 ]; then
   echo "Please run this script as root, e.g.:"
   echo "  curl -fsSL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | sudo sh"
   exit 1
 fi
 
-# ---- select asset name based on OS + arch ----
+# -------- select asset name based on OS + arch --------
 ASSET=""
 
 case "$OS_NAME" in
@@ -74,6 +75,9 @@ curl -fsSL -o "$TMP_BIN" "$DOWNLOAD_URL"
 
 chmod +x "$TMP_BIN"
 
+# ensure install dir exists
+mkdir -p "$INSTALL_DIR"
+
 echo "Installing $BINARY_NAME to $INSTALL_DIR..."
 install -m 755 "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 
@@ -101,8 +105,25 @@ if ! command -v rsync >/dev/null 2>&1; then
   fi
 fi
 
+# Detect HOME pre Snapfox user (nie vždy /home/user)
+USER_HOME="$(getent passwd "$SNAPFOX_USER" | cut -d: -f6 2>/dev/null || true)"
+if [ -z "$USER_HOME" ]; then
+  USER_HOME="/home/$SNAPFOX_USER"
+fi
+
 SERVICE_PATH="/etc/systemd/system/snapfox.service"
 TIMER_PATH="/etc/systemd/system/snapfox.timer"
+
+# Check if systemd exists
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo ""
+  echo "systemd not found. Installed only binary:"
+  echo "  $INSTALL_DIR/$BINARY_NAME"
+  echo "You can run Snapfox manually:"
+  echo "  snapfox ui"
+  echo "  snapfox run-due"
+  exit 0
+fi
 
 echo "Creating $SERVICE_PATH ..."
 cat > "$SERVICE_PATH" <<EOF
@@ -113,7 +134,8 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=$SNAPFOX_USER
-WorkingDirectory=/home/$SNAPFOX_USER
+WorkingDirectory=$USER_HOME
+Environment=HOME=$USER_HOME
 ExecStart=$INSTALL_DIR/$BINARY_NAME run-due
 Nice=10
 EOF
