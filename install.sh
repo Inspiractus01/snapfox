@@ -19,7 +19,7 @@ echo "Install:  $INSTALL_DIR/$BINARY_NAME"
 echo "User:     $SNAPFOX_USER"
 echo ""
 
-if [ "$EUID" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ]; then
   echo "Please run this script as root, e.g.:"
   echo "  curl -fsSL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | sudo sh"
   exit 1
