@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
+REPO_OWNER="Inspiractus01"
+REPO_NAME="snapfox"
 BINARY_NAME="snapfox"
 INSTALL_DIR="/usr/local/bin"
 OS_NAME="$(uname -s)"
+ARCH_NAME="$(uname -m)"
 
-# User, under which snapfox will run (and where ~/.snapfox/config.json is)
+# User under which snapfox will run (~/.snapfox/config.json)
 SNAPFOX_USER="${SUDO_USER:-$USER}"
 
 echo "=== Snapfox installer ==="
 echo "OS:       $OS_NAME"
+echo "Arch:     $ARCH_NAME"
 echo "Binary:   $BINARY_NAME"
 echo "Install:  $INSTALL_DIR/$BINARY_NAME"
 echo "User:     $SNAPFOX_USER"
@@ -17,35 +21,63 @@ echo ""
 
 if [ "$EUID" -ne 0 ]; then
   echo "Please run this script as root, e.g.:"
-  echo "  sudo ./install.sh"
+  echo "  curl -fsSL https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/install.sh | sudo sh"
   exit 1
 fi
 
-# check binary
-if [ ! -f "./$BINARY_NAME" ]; then
-  echo "Error: ./$BINARY_NAME not found."
-  echo "Build it first:"
-  echo "  go build -o snapfox"
-  exit 1
-fi
+# ---- select asset name based on OS + arch ----
+ASSET=""
 
-# install rsync only on Linux with apt (Debian/Ubuntu)
-if [ "$OS_NAME" = "Linux" ]; then
-  if ! command -v rsync >/dev/null 2>&1; then
-    echo "rsync not found, installing via apt-get..."
-    if command -v apt-get >/dev/null 2>&1; then
-      apt-get update -y
-      apt-get install -y rsync
-    else
-      echo "apt-get not found. Please install rsync manually."
-    fi
-  fi
-fi
+case "$OS_NAME" in
+  Linux)
+    case "$ARCH_NAME" in
+      x86_64|amd64)
+        ASSET="snapfox-linux-amd64"
+        ;;
+      aarch64|arm64)
+        ASSET="snapfox-linux-arm64"
+        ;;
+      *)
+        echo "Unsupported Linux arch: $ARCH_NAME"
+        exit 1
+        ;;
+    esac
+    ;;
+  Darwin)
+    case "$ARCH_NAME" in
+      arm64)
+        ASSET="snapfox-darwin-arm64"
+        ;;
+      x86_64)
+        ASSET="snapfox-darwin-amd64"
+        ;;
+      *)
+        echo "Unsupported macOS arch: $ARCH_NAME"
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "Unsupported OS: $OS_NAME"
+    exit 1
+    ;;
+esac
+
+DOWNLOAD_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$ASSET"
+
+echo "Downloading $ASSET from:"
+echo "  $DOWNLOAD_URL"
+echo ""
+
+TMP_BIN="/tmp/$ASSET"
+curl -fsSL -o "$TMP_BIN" "$DOWNLOAD_URL"
+
+chmod +x "$TMP_BIN"
 
 echo "Installing $BINARY_NAME to $INSTALL_DIR..."
-install -m 755 "./$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+install -m 755 "$TMP_BIN" "$INSTALL_DIR/$BINARY_NAME"
 
-# ----- non-linux: just install binary and exit -----
+# ---------- Non-Linux: just install binary ----------
 if [ "$OS_NAME" != "Linux" ]; then
   echo ""
   echo "Non-Linux OS detected ($OS_NAME)."
@@ -58,7 +90,17 @@ if [ "$OS_NAME" != "Linux" ]; then
   exit 0
 fi
 
-# ----- Linux + systemd timer -----
+# ---------- Linux: rsync + systemd ----------
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "rsync not found, installing via apt-get (if available)..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y
+    apt-get install -y rsync
+  else
+    echo "apt-get not found. Please install rsync manually."
+  fi
+fi
+
 SERVICE_PATH="/etc/systemd/system/snapfox.service"
 TIMER_PATH="/etc/systemd/system/snapfox.timer"
 

@@ -8,12 +8,9 @@ import (
 	"strings"
 	"time"
 )
-
-// zvýš to keď vydáš novú verziu
 const Version = "0.1.0"
 
 // TODO: nastav na svoj GitHub repo
-// napr. "https://raw.githubusercontent.com/michalmucha/snapfox/main/latest.txt"
 const latestVersionURL = "https://raw.githubusercontent.com/YOUR_GH_USER/snapfox/main/latest.txt"
 
 func parseVersion(v string) []int {
